@@ -1,11 +1,13 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 class ErrorKind:
     VALIDATION="validation"; NOT_FOUND="not_found"; FORBIDDEN="forbidden"; CONFLICT="conflict"
 class DomainError(Exception):
     kind=ErrorKind.VALIDATION
-    def __init__(self,message): super().__init__(message); self.message=message
+    def __init__(self,message,details=None):
+        super().__init__(message); self.message=message; self.details=details
 class ValidationError(DomainError): kind=ErrorKind.VALIDATION
 class NotFoundError(DomainError): kind=ErrorKind.NOT_FOUND
 class PermissionDenied(DomainError): kind=ErrorKind.FORBIDDEN
@@ -36,3 +38,15 @@ def require_number(value,field,minimum=0.0):
     return number
 def ensure_role(role,allowed):
     if role not in allowed: raise PermissionDenied("当前角色无权执行该操作")
+def parse_event_time(value,field):
+    if isinstance(value,datetime):
+        dt=value
+    else:
+        if not isinstance(value,str) or not value.strip(): raise ValidationError(f"{field}必须是ISO时间")
+        text=value.strip().replace("Z","+00:00")
+        try: dt=datetime.fromisoformat(text)
+        except ValueError: raise ValidationError(f"{field}不是有效的ISO时间")
+    if dt.tzinfo is None: dt=dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+def canonical_event_time(value,field):
+    return parse_event_time(value,field).replace(microsecond=0).isoformat()

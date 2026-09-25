@@ -42,6 +42,12 @@ def make_handler(service: Service, static_dir: str):
         def _identity(self) -> Tuple[str, str]:
             return self.headers.get("X-Actor", ""), self.headers.get("X-Role", "")
 
+        def _int(self, value: str, field: str = "id") -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError) as exc:
+                raise ValidationError(f"{field}必须是整数") from exc
+
         def _body(self) -> Dict[str, Any]:
             length = int(self.headers.get("Content-Length", "0") or 0)
             if length <= 0:
@@ -71,7 +77,11 @@ def make_handler(service: Service, static_dir: str):
                 status = 400
             else:
                 status = 500
-            self._json(status, {"error": exc.__class__.__name__, "message": str(exc)})
+            payload = {"error": exc.__class__.__name__, "message": str(exc)}
+            details = getattr(exc, "details", None)
+            if details:
+                payload["details"] = details
+            self._json(status, payload)
 
         def do_GET(self) -> None:
             try:
@@ -85,15 +95,65 @@ def make_handler(service: Service, static_dir: str):
                     del actor
                     self._json(200, {"items": service.list_items(role)})
                 elif path.startswith("/api/items/") and path.endswith("/records"):
-                    item_id = int(path.split("/")[3])
+                    item_id = self._int(path.split("/")[3])
                     actor, role = self._identity()
                     del actor
                     self._json(200, {"records": service.list_records(item_id, role)})
                 elif path.startswith("/api/items/"):
-                    item_id = int(path.rsplit("/", 1)[-1])
+                    item_id = self._int(path.rsplit("/", 1)[-1])
                     actor, role = self._identity()
                     del actor
                     self._json(200, service.get_item(item_id, role))
+                elif path == "/api/resources":
+                    actor, role = self._identity()
+                    query = parse_qs(urlparse(self.path).query)
+                    kind = query.get("kind", [None])[0]
+                    del actor
+                    self._json(200, {"resources": service.list_resources(role, kind)})
+                elif path.startswith("/api/resources/"):
+                    resource_id = self._int(path.rsplit("/", 1)[-1])
+                    actor, role = self._identity()
+                    del actor
+                    self._json(200, service.get_resource(resource_id, role))
+                elif path == "/api/zones":
+                    actor, role = self._identity()
+                    query = parse_qs(urlparse(self.path).query)
+                    item_param = query.get("item_id", [None])[0]
+                    item_id = self._int(item_param, "item_id") if item_param is not None else None
+                    del actor
+                    self._json(200, {"zones": service.list_zones(role, item_id)})
+                elif path.startswith("/api/zones/") and path.endswith("/occupancies"):
+                    zone_id = self._int(path.split("/")[3])
+                    actor, role = self._identity()
+                    del actor
+                    self._json(200, {"occupancies": service.list_occupancies(role, zone_id=zone_id)})
+                elif path.startswith("/api/zones/"):
+                    zone_id = self._int(path.rsplit("/", 1)[-1])
+                    actor, role = self._identity()
+                    del actor
+                    self._json(200, service.get_zone(zone_id, role))
+                elif path == "/api/occupancies":
+                    actor, role = self._identity()
+                    query = parse_qs(urlparse(self.path).query)
+                    zone_param = query.get("zone_id", [None])[0]
+                    resource_param = query.get("resource_id", [None])[0]
+                    zone_id = self._int(zone_param, "zone_id") if zone_param is not None else None
+                    resource_id = self._int(resource_param, "resource_id") if resource_param is not None else None
+                    del actor
+                    self._json(200, {"occupancies": service.list_occupancies(
+                        role, zone_id=zone_id, resource_id=resource_id)})
+                elif path == "/api/offline-batches":
+                    actor, role = self._identity()
+                    query = parse_qs(urlparse(self.path).query)
+                    zone_param = query.get("zone_id", [None])[0]
+                    zone_id = self._int(zone_param, "zone_id") if zone_param is not None else None
+                    del actor
+                    self._json(200, {"batches": service.list_offline_batches(role, zone_id)})
+                elif path.startswith("/api/offline-batches/"):
+                    batch_id = self._int(path.rsplit("/", 1)[-1])
+                    actor, role = self._identity()
+                    del actor
+                    self._json(200, service.get_offline_batch(batch_id, role))
                 elif path == "/api/audit":
                     actor, role = self._identity()
                     del actor
@@ -111,14 +171,36 @@ def make_handler(service: Service, static_dir: str):
                 if path == "/api/items":
                     self._json(201, service.create_item(body, actor, role))
                 elif path.startswith("/api/items/") and path.endswith("/records"):
-                    item_id = int(path.split("/")[3])
+                    item_id = self._int(path.split("/")[3])
                     self._json(201, service.add_record(item_id, body, actor, role))
                 elif path.startswith("/api/items/") and path.endswith("/transition"):
-                    item_id = int(path.split("/")[3])
+                    item_id = self._int(path.split("/")[3])
                     target = body.get("target")
                     expected = body.get("expected_version")
                     self._json(200, service.transition(
                         item_id, target, expected, actor, role))
+                elif path.startswith("/api/items/") and path.endswith("/zones"):
+                    item_id = self._int(path.split("/")[3])
+                    self._json(201, service.create_zone(item_id, body, actor, role))
+                elif path == "/api/resources":
+                    self._json(201, service.create_resource(body, actor, role))
+                elif path == "/api/occupancies":
+                    self._json(201, service.assign(body, actor, role))
+                elif path.startswith("/api/occupancies/") and path.endswith("/withdraw"):
+                    occupancy_id = self._int(path.split("/")[3])
+                    self._json(200, service.withdraw(occupancy_id, body, actor, role))
+                elif path == "/api/offline-batches":
+                    self._json(201, service.upload_offline(body, actor, role))
+                elif path.startswith("/api/offline-batches/") and path.endswith("/confirm"):
+                    batch_id = self._int(path.split("/")[3])
+                    self._json(200, service.confirm_offline(batch_id, body, actor, role))
+                elif path.startswith("/api/zones/") and path.endswith("/transition"):
+                    zone_id = self._int(path.split("/")[3])
+                    target = body.get("target")
+                    expected = body.get("expected_version")
+                    if target != "closed":
+                        raise ValidationError("任务区只能关闭")
+                    self._json(200, service.close_zone(zone_id, expected, actor, role))
                 else:
                     self._json(404, {"error": "not_found"})
             except Exception as exc:

@@ -30,9 +30,24 @@ python3 app.py --db ./data.db --port 8319
 - `GET /api/items/{id}`
 - `POST /api/items/{id}/records`
 - `POST /api/items/{id}/transition`，必须提交`expected_version`
+- `POST /api/items/{id}/zones`、`GET /api/zones?item_id=`：任务区（active/closed）
+- `POST /api/resources`、`GET /api/resources`：救援队（team）和车辆（vehicle）
+- `POST /api/occupancies`：派单，按`arrived_at`/`withdrawn_at`检测同一资源的时段重叠，冲突返回409并在`details.conflicts`中指出冲突任务区
+- `POST /api/occupancies/{id}/withdraw`、`GET /api/occupancies?zone_id=&resource_id=`
+- `POST /api/offline-batches`：离线批次回传，`reports`为`{status,event_time}`数组，status取`departed`/`arrived`/`withdrawn`
+- `POST /api/offline-batches/{id}/confirm`：确认`{index,accepted}`或驳回挂起的矛盾状态
+- `GET /api/offline-batches`、`POST /api/zones/{id}/transition`
 - `GET /api/audit`
 
 允许角色：field_commander, incident_commander, logistics, viewer。火线长度、风向变化和离线记录数量影响风险等级；同一资源不能同时出现在多个活动任务中。
+
+### 任务区与资源占用规则
+
+- 资源随班次到场/撤离：派单给出`arrived_at`和可选`withdrawn_at`（半开区间，首尾相接不算重叠）；未给撤离时间视为持续在场。
+- 派单与该资源任意任务区的已有占用重叠时，分配被拒绝（409），响应列出冲突的任务区编号、名称和时段。
+- 离线队伍用同一`batch_no`重复回传时按最早现场时间合并：同阶段更晚的时间记为重复；更早或违反出发→到场→撤离顺序的矛盾状态进入`pending`，不改动占用，等待调度员确认。
+- 确认接受的矛盾记录会同步到资源占用（到场/撤离时间）；驳回则保留原值。
+- 任务区关闭前，未撤离资源数（`active_occupancies`）和未确认离线记录数（`pending_offline`）都必须为零，否则409；关闭后不再接受新派单。
 
 ## 测试
 

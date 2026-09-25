@@ -20,3 +20,42 @@ def validate_transition(current,target):
     if not can_transition(current,target): raise ConflictError(f"不能从{current}转换到{target}")
 def completion_blockers(target,open_records): return ["仍有未关闭事项"] if target in TERMINAL_STATES and open_records>0 else []
 def role_for_transition(target): return set(TRANSITION_ROLES.get(target,[]))
+
+# ---- 任务区与资源占用 ----
+ZONE_STATES=['active', 'closed']
+ZONE_TRANSITIONS={'active': ['closed'], 'closed': []}
+ZONE_TRANSITION_ROLES={'closed': ['incident_commander']}
+RESOURCE_KINDS=['team', 'vehicle']
+# 离线回传阶段：出发 -> 到场 -> 撤离
+OFFLINE_PHASES=['departed', 'arrived', 'withdrawn']
+ZONE_CREATE_ROLES=set(['field_commander'])
+RESOURCE_CREATE_ROLES=set(['logistics'])
+ASSIGN_ROLES=set(['logistics'])
+OFFLINE_UPLOAD_ROLES=set(['field_commander', 'logistics'])
+OFFLINE_CONFIRM_ROLES=set(['field_commander', 'incident_commander', 'logistics'])
+ZONE_VIEW_ROLES=set(['field_commander', 'incident_commander', 'logistics', 'viewer'])
+
+def validate_zone_transition(current,target):
+    if current not in ZONE_STATES or target not in ZONE_STATES: raise ValidationError("未知任务区状态")
+    if target not in ZONE_TRANSITIONS.get(current,[]): raise ConflictError(f"任务区不能从{current}转换到{target}")
+def role_for_zone_transition(target): return set(ZONE_TRANSITION_ROLES.get(target,[]))
+def zone_closure_blockers(active_occupancies,pending_offline):
+    blockers=[]
+    if active_occupancies>0: blockers.append(f"仍有{active_occupancies}个资源未撤离")
+    if pending_offline>0: blockers.append(f"仍有{pending_offline}条离线记录未确认")
+    return blockers
+def _phase_index(phase):
+    if phase not in OFFLINE_PHASES: raise ValidationError("status必须是departed/arrived/withdrawn")
+    return OFFLINE_PHASES.index(phase)
+def evaluate_phase(phase,timestamp,current):
+    """根据“最早现场时间合并”规则评估一条离线记录。
+    current: {阶段: 最早时间(dict)}，返回 accept / duplicate / conflict。"""
+    idx=_phase_index(phase)
+    existing=current.get(phase)
+    if existing is not None:
+        return "duplicate" if timestamp>=existing else "conflict"
+    for other,other_time in current.items():
+        other_idx=OFFLINE_PHASES.index(other)
+        if other_idx<idx and other_time>timestamp: return "conflict"
+        if other_idx>idx and other_time<timestamp: return "conflict"
+    return "accept"
