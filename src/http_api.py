@@ -71,7 +71,8 @@ def make_handler(service: Service, static_dir: str):
                 status = 400
             else:
                 status = 500
-            self._json(status, {"error": exc.__class__.__name__, "message": str(exc)})
+            self._json(status, {"error": exc.__class__.__name__, "message": str(exc),
+                                **({"details": exc.details} if getattr(exc, "details", None) else {})})
 
         def do_GET(self) -> None:
             try:
@@ -98,6 +99,38 @@ def make_handler(service: Service, static_dir: str):
                     actor, role = self._identity()
                     del actor
                     self._json(200, {"events": service.audit(role)})
+                elif path == "/api/zones":
+                    actor, role = self._identity()
+                    status = parse_qs(urlparse(self.path).query).get("status", [None])[0]
+                    del actor
+                    self._json(200, {"zones": service.list_zones(role, status)})
+                elif path.startswith("/api/zones/") and path.endswith("/assignments"):
+                    zone_id = int(path.split("/")[3])
+                    actor, role = self._identity()
+                    del actor
+                    self._json(200, {"assignments": service.list_zone_assignments(zone_id, role)})
+                elif path.startswith("/api/zones/"):
+                    zone_id = int(path.rsplit("/", 1)[-1])
+                    actor, role = self._identity()
+                    del actor
+                    self._json(200, service.get_zone(zone_id, role))
+                elif path == "/api/resources":
+                    actor, role = self._identity()
+                    del actor
+                    self._json(200, {"resources": service.list_resources(role)})
+                elif path.startswith("/api/resources/") and path.endswith("/assignments"):
+                    resource_id = int(path.split("/")[3])
+                    actor, role = self._identity()
+                    del actor
+                    self._json(200, {"assignments": service.list_resource_assignments(resource_id, role)})
+                elif path == "/api/offline-reports":
+                    actor, role = self._identity()
+                    query = parse_qs(urlparse(self.path).query)
+                    review_status = query.get("status", [None])[0]
+                    zone_value = query.get("zone_id", [None])[0]
+                    zone_id = int(zone_value) if zone_value is not None else None
+                    del actor
+                    self._json(200, {"reports": service.list_offline_reports(role, review_status, zone_id)})
                 else:
                     self._json(404, {"error": "not_found"})
             except Exception as exc:
@@ -119,6 +152,22 @@ def make_handler(service: Service, static_dir: str):
                     expected = body.get("expected_version")
                     self._json(200, service.transition(
                         item_id, target, expected, actor, role))
+                elif path == "/api/zones":
+                    self._json(201, service.create_zone(body, actor, role))
+                elif path.startswith("/api/zones/") and path.endswith("/close"):
+                    zone_id = int(path.split("/")[3])
+                    self._json(200, service.close_zone(zone_id, body, actor, role))
+                elif path == "/api/resources":
+                    self._json(201, service.create_resource(body, actor, role))
+                elif path == "/api/assignments":
+                    self._json(201, service.dispatch(body, actor, role))
+                elif path == "/api/assignments/release":
+                    self._json(200, service.release(body, actor, role))
+                elif path == "/api/offline-reports":
+                    self._json(201, service.upload_offline_batch(body, actor, role))
+                elif path.startswith("/api/offline-reports/") and path.endswith("/review"):
+                    report_id = int(path.split("/")[3])
+                    self._json(200, service.review_offline_report(report_id, body, actor, role))
                 else:
                     self._json(404, {"error": "not_found"})
             except Exception as exc:
